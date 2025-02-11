@@ -32,8 +32,8 @@ namespace base {
 
 #if defined(__OS_ANDROID__)
 void WarnThatTheCurrentThreadIsProbablyDeadlocked() {
-  ABSL_LOG(WARNING) << "Probable deadlock:";
-  ABSL_LOG(WARNING) << StackTraceToString(GetStackTrace());
+  LOG(WARNING) << "Probable deadlock:";
+  LOG(WARNING) << StackTraceToString(GetStackTrace());
 }
 #endif
 

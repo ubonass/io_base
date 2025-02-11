@@ -8,8 +8,8 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#ifndef RTC_BASE_DEPRECATED_RECURSIVE_CRITICAL_SECTION_H_
-#define RTC_BASE_DEPRECATED_RECURSIVE_CRITICAL_SECTION_H_
+#ifndef BASE_DEPRECATED_RECURSIVE_CRITICAL_SECTION_H_
+#define BASE_DEPRECATED_RECURSIVE_CRITICAL_SECTION_H_
 
 #include <atomic>
 
@@ -60,7 +60,7 @@ class RecursiveCriticalSection {
   void Leave() const;
 
  private:
-  // Use only for RTC_DCHECKing.
+  // Use only for ABSL_DCHECKing.
   bool CurrentThreadIsOwner() const;
 
 #if defined(__OS_WIN__)
@@ -81,8 +81,8 @@ class RecursiveCriticalSection {
 #else
   mutable pthread_mutex_t mutex_;
 #endif
-  mutable PlatformThreadRef thread_;  // Only used by RTC_DCHECKs.
-  mutable int recursion_count_;       // Only used by RTC_DCHECKs.
+  mutable PlatformThreadRef thread_;  // Only used by ABSL_DCHECKs.
+  mutable int recursion_count_;       // Only used by ABSL_DCHECKs.
 #else  // !defined(_WIN32) && !defined(__OS_POSIX__)
 #error Unsupported platform.
 #endif

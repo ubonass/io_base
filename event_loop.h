@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
 #include "build_macros.h"
 
 #if defined(_MSC_VER) && _MSC_VER < 1300
@@ -20,13 +21,20 @@
 #endif
 
 #if defined(__OS_POSIX__)
-#include <fcntl.h>
-// "poll" will be used to wait for the signal dispatcher.
+#if defined(__OS_LINUX__)
+// On Linux, use epoll.
+#include <sys/epoll.h>
+
+#define __USE_EPOLL__ 1
+#elif defined(__OS_FUCHSIA__) || defined(__OS_MAC__)
+// Fuchsia implements select and poll but not epoll, and testing shows that poll
+// is faster than select.
 #include <poll.h>
-#include <sys/ioctl.h>
-#include <sys/select.h>
-#include <unistd.h>
-#endif
+#define __USE_POLL__ 1
+#else
+// On other POSIX systems, use select by default.
+#endif  // __OS_LINUX__, __OS_FUCHSIA__, __OS_MAC__
+#endif  // __OS_POSIX__
 
 #if defined(__OS_WIN__)
 #include <windows.h>
@@ -36,6 +44,7 @@
 
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
+#include "recursive_critical_section.h"
 
 namespace base {
 
@@ -136,23 +145,47 @@ class Signaler : public Dispatcher {
 class EvenLoop {
  public:
   EvenLoop();
-  ~EvenLoop();
+  virtual ~EvenLoop();
 
-  bool Wait(absl::Duration max_wait_duration, bool process_io);
+  virtual bool Wait(absl::Duration max_wait_duration, bool process_io);
 
-  void WakeUp();
+  virtual void WakeUp();
 
-  void Add(Dispatcher* dispatcher);
-  void Remove(Dispatcher* dispatcher);
-  void Update(Dispatcher* dispatcher);
+  virtual void Add(Dispatcher* dispatcher);
+  virtual void Remove(Dispatcher* dispatcher);
+  virtual void Update(Dispatcher* dispatcher);
 
- private:
+ protected:
   // The number of events to process with one call to "epoll_wait".
   static constexpr size_t kNumEpollEvents = 128;
   // A local historical definition of "foreverness", in milliseconds.
   static constexpr int kForeverMs = -1;
 
   static int ToCmsWait(absl::Duration max_wait_duration);
+
+#if defined(__OS_POSIX__)
+  bool WaitSelect(int cmsWait, bool process_io);
+
+#if defined(__USE_EPOLL__)
+  void AddEpoll(Dispatcher* dispatcher, uint64_t key);
+  void RemoveEpoll(Dispatcher* dispatcher);
+  void UpdateEpoll(Dispatcher* dispatcher, uint64_t key);
+  bool WaitEpoll(int cmsWait);
+  bool WaitPollOneDispatcher(int cmsWait, Dispatcher* dispatcher);
+
+  // This array is accessed in isolation by a thread calling into Wait().
+  // It's useless to use a SequenceChecker to guard it because a socket
+  // server can outlive the thread it's bound to, forcing the Wait call
+  // to have to reset the sequence checker on Wait calls.
+  std::array<epoll_event, kNumEpollEvents> epoll_events_;
+  const int epoll_fd_ = INVALID_SOCKET;
+
+#elif defined(__USE_POLL__)
+  bool WaitPoll(int cmsWait, bool process_io);
+
+#endif  // __USE_EPOLL__, __USE_POLL__
+#endif  // __OS_POSIX__
+
   // uint64_t keys are used to uniquely identify a dispatcher in order to avoid
   // the ABA problem during the epoll loop (a dispatcher being destroyed and
   // replaced by one with the same address).
@@ -168,6 +201,14 @@ class EvenLoop {
   // Kept as a member variable just for efficiency.
   std::vector<uint64_t> current_dispatcher_keys_;
   Signaler* signal_wakeup_;  // Assigned in constructor only
+  RecursiveCriticalSection crit_;
+#if defined(__OS_WIN__)
+  const WSAEVENT socket_ev_;
+#endif
+  bool fWait_;
+  // Are we currently in a select()/epoll()/WSAWaitForMultipleEvents loop?
+  // Used for a DCHECK, because we don't support reentrant waiting.
+  bool waiting_ = false;
 };
 
 }  // namespace base
