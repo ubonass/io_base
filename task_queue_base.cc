@@ -11,7 +11,7 @@
 
 #include "absl/base/attributes.h"
 #include "absl/base/config.h"
-
+#if 0
 #if defined(ABSL_HAVE_THREAD_LOCAL)
 
 namespace base {
@@ -76,3 +76,4 @@ TaskQueueBase::CurrentTaskQueueSetter::~CurrentTaskQueueSetter() {
 #else
 #error Unsupported platform
 #endif
+#endif 

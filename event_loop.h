@@ -1,214 +1,146 @@
 ﻿#ifndef BASE_EVENT_LOOP_H
 #define BASE_EVENT_LOOP_H
 
-#include <array>
 #include <cstdint>
-#include <cstring>
 #include <memory>
-#include <string>
-#include <unordered_map>
-#include <utility>
-#include <vector>
+#include <type_traits>
 
-#include "build_macros.h"
-
-#if defined(_MSC_VER) && _MSC_VER < 1300
-#pragma warning(disable : 4786)
-#endif
-
-#ifdef MEMORY_SANITIZER
-#include <sanitizer/msan_interface.h>
-#endif
-
-#if defined(__OS_POSIX__)
-#if defined(__OS_LINUX__)
-// On Linux, use epoll.
-#include <sys/epoll.h>
-
-#define __USE_EPOLL__ 1
-#elif defined(__OS_FUCHSIA__) || defined(__OS_MAC__)
-// Fuchsia implements select and poll but not epoll, and testing shows that poll
-// is faster than select.
-#include <poll.h>
-#define __USE_POLL__ 1
-#else
-// On other POSIX systems, use select by default.
-#endif  // __OS_LINUX__, __OS_FUCHSIA__, __OS_MAC__
-#endif  // __OS_POSIX__
-
-#if defined(__OS_WIN__)
+#if defined(_WIN32)
 #include <windows.h>
 #include <winsock2.h>
-#include <ws2tcpip.h>
-#endif
+#else
+#include <sys/socket.h>
+#endif  // defined(_WIN32)
 
+#include "absl/base/attributes.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
-#include "recursive_critical_section.h"
+#include "function_view.h"
+#include "task_queue_base.h"
+#include "time_utils.h"
 
 namespace base {
 
-enum DispatcherEvent {
-  DE_READ = 0x0001,
-  DE_WRITE = 0x0002,
-  DE_CONNECT = 0x0004,
-  DE_CLOSE = 0x0008,
-  DE_ACCEPT = 0x0010,
-};
-
-class Dispatcher {
- public:
-  virtual ~Dispatcher() {}
-  virtual uint32_t GetRequestedEvents() = 0;
-  virtual void OnEvent(uint32_t ff, int err) = 0;
-#if defined(__OS_WIN__)
-  virtual WSAEVENT GetWSAEvent() = 0;
-  virtual SOCKET GetSocket() = 0;
-  virtual bool CheckSignalClose() = 0;
+#if defined(_WIN32)
+using SocketFd = SOCKET;
 #else
-  virtual int GetDescriptor() = 0;
-  virtual bool IsDescriptorClosed() = 0;
-#endif
-};
-
-#if defined(__OS_WIN__)
-inline uint32_t FlagsToEvents(uint32_t events) {
-  uint32_t ffFD = FD_CLOSE;
-  if (events & DE_READ) {
-    ffFD |= FD_READ;
-  }
-  if (events & DE_WRITE) {
-    ffFD |= FD_WRITE;
-  }
-  if (events & DE_CONNECT) {
-    ffFD |= FD_CONNECT;
-  }
-  if (events & DE_ACCEPT) {
-    ffFD |= FD_ACCEPT;
-  }
-  return ffFD;
-}
-
-class EvenLoop;
-
-// Sets the value of a boolean value to false when signaled.
-class Signaler : public Dispatcher {
- public:
-  Signaler(EvenLoop* loop, bool& flag_to_clear);
-
-  ~Signaler() override;
-
-  virtual void Signal();
-
-  uint32_t GetRequestedEvents() override;
-
-  void OnEvent(uint32_t ff, int err) override;
-
-  WSAEVENT GetWSAEvent() override;
-  SOCKET GetSocket() override;
-
-  bool CheckSignalClose() override;
-
- private:
-  EvenLoop* loop_;
-  WSAEVENT hev_;
-  bool& flag_to_clear_;
-};
+using SocketFd = int;
 #endif
 
-#if defined(__OS_POSIX__)
-class Signaler : public Dispatcher {
+// A bitmask indicating a set of I/O events.
+using EventMask = uint8_t;
+
+inline constexpr EventMask kEventReadable = 0x01;
+inline constexpr EventMask kEventWritable = 0x02;
+inline constexpr EventMask kEventError = 0x04;
+
+class EventLoop;
+
+// A listener associated with a file descriptor.
+class EventListener {
  public:
-  Signaler(EvenLoop* loop, bool& flag_to_clear);
+  virtual ~EventListener() = default;
 
-  ~Signaler() override;
-
-  virtual void Signal();
-
-  uint32_t GetRequestedEvents() override;
-
-  void OnEvent(uint32_t /* ff */, int /* err */) override;
-
-  int GetDescriptor() override;
-
-  bool IsDescriptorClosed() override;
-
- private:
-  EvenLoop* const loop_;
-  bool fSignaled_;
-  absl::Mutex mutex_;
-  bool& flag_to_clear_;
-  std::array<int, 2> afd_ = {-1, -1};
+  virtual void OnSocketEvent(EventLoop* event_loop,
+                             SocketFd fd,
+                             EventMask events) {}
 };
-#endif
 
-class EvenLoop {
+class EventLoop : public TaskQueueBase {
  public:
-  EvenLoop();
-  virtual ~EvenLoop();
+  EventLoop();
+  virtual ~EventLoop() = default;
+  // EventLoop binds to the specified thread
+  void Begin();
+  // Release all tasks
+  void Quit();
+  //
+  bool IsQuitting();
 
-  virtual bool Wait(absl::Duration max_wait_duration, bool process_io);
+ public:
+  // wakeup the loop
+  virtual void WakeUp() = 0;
+  // Indicates whether the event loop implementation supports edge-triggered
+  // notifications.  If true, all of the events are permanent and are notified
+  // as long as they are registered.  If false, whenever an event is triggered,
+  // the event registration is unset and has to be re-armed using RearmSocket().
+  virtual bool SupportsEdgeTriggered() const { return false; }
 
-  virtual void WakeUp();
+  // Watches for all of the requested |events| that occur on the |fd| and
+  // notifies the |listener| about them.  |fd| must not be already registered;
+  // if it is, the function returns false.  The |listener| must be alive for as
+  // long as it is registered.
+  virtual ABSL_MUST_USE_RESULT bool RegisterSocket(SocketFd fd,
+                                                   EventMask events,
+                                                   EventListener* listener) = 0;
+  // Removes the listener associated with |fd|.  Returns false if the listener
+  // is not found.
+  virtual ABSL_MUST_USE_RESULT bool UnregisterSocket(SocketFd fd) = 0;
+  // Adds |events| to the list of the listened events for |fd|, given that |fd|
+  // is already registered.  Must be only called if SupportsEdgeTriggered() is
+  // false.
+  virtual ABSL_MUST_USE_RESULT bool RearmSocket(SocketFd fd,
+                                                EventMask events) = 0;
+  // Causes the |fd| to be notified of |events| on the next event loop iteration
+  // even if none of the specified events has happened.
+  virtual ABSL_MUST_USE_RESULT bool ArtificiallyNotifyEvent(
+      SocketFd fd,
+      EventMask events) = 0;
 
-  virtual void Add(Dispatcher* dispatcher);
-  virtual void Remove(Dispatcher* dispatcher);
-  virtual void Update(Dispatcher* dispatcher);
+  // Runs a single iteration of the event loop.  The iteration will run for at
+  // most |default_timeout|.
+  virtual void RunEventLoopOnce(absl::Duration default_timeout) = 0;
+
+ public:
+  // Convenience method to invoke a functor on another thread.
+  // Blocks the current thread until execution is complete.
+  // Ex: thread.BlockingCall([&] { result = MyFunctionReturningBool(); });
+  // NOTE: This function can only be called when synchronous calls are allowed.
+  // See ScopedDisallowBlockingCalls for details.
+  // NOTE: Blocking calls are DISCOURAGED, consider if what you're doing can
+  // be achieved with PostTask() and callbacks instead.
+  void BlockingCall(FunctionView<void()> functor,
+                    const Location& location = Location::Current()) {
+    BlockingCallImpl(std::move(functor), location);
+  }
+
+  template <typename Functor,
+            typename ReturnT = std::invoke_result_t<Functor>,
+            typename = typename std::enable_if_t<!std::is_void_v<ReturnT>>>
+  ReturnT BlockingCall(Functor&& functor,
+                       const Location& location = Location::Current()) {
+    ReturnT result;
+    BlockingCall([&] { result = std::forward<Functor>(functor)(); }, location);
+    return result;
+  }
+
+  virtual void BlockingCallImpl(FunctionView<void()> functor,
+                                const Location& location);
+
+ public:
+  virtual void PostDelayedTaskOnTaskQueue(absl::AnyInvocable<void() &&> task,
+                                          int64_t start_micros,
+                                          absl::Duration delay) = 0;
 
  protected:
-  // The number of events to process with one call to "epoll_wait".
-  static constexpr size_t kNumEpollEvents = 128;
-  // A local historical definition of "foreverness", in milliseconds.
-  static constexpr int kForeverMs = -1;
+  void RunPendingTasks();
+  // Subclasses should implement this method to support the behavior defined in
+  // the PostTask and PostTaskTraits docs above.
+  void PostTaskImpl(absl::AnyInvocable<void() &&> task,
+                    const PostTaskTraits& traits,
+                    const Location& location) override;
 
+  void PostDelayedTaskImpl(absl::AnyInvocable<void() &&> task,
+                           absl::Duration delay,
+                           const PostDelayedTaskTraits& traits,
+                           const Location& location) override;
+
+ protected:
   static int ToCmsWait(absl::Duration max_wait_duration);
-
-#if defined(__OS_POSIX__)
-  bool WaitSelect(int cmsWait, bool process_io);
-
-#if defined(__USE_EPOLL__)
-  void AddEpoll(Dispatcher* dispatcher, uint64_t key);
-  void RemoveEpoll(Dispatcher* dispatcher);
-  void UpdateEpoll(Dispatcher* dispatcher, uint64_t key);
-  bool WaitEpoll(int cmsWait);
-  bool WaitPollOneDispatcher(int cmsWait, Dispatcher* dispatcher);
-
-  // This array is accessed in isolation by a thread calling into Wait().
-  // It's useless to use a SequenceChecker to guard it because a socket
-  // server can outlive the thread it's bound to, forcing the Wait call
-  // to have to reset the sequence checker on Wait calls.
-  std::array<epoll_event, kNumEpollEvents> epoll_events_;
-  const int epoll_fd_ = INVALID_SOCKET;
-
-#elif defined(__USE_POLL__)
-  bool WaitPoll(int cmsWait, bool process_io);
-
-#endif  // __USE_EPOLL__, __USE_POLL__
-#endif  // __OS_POSIX__
-
-  // uint64_t keys are used to uniquely identify a dispatcher in order to avoid
-  // the ABA problem during the epoll loop (a dispatcher being destroyed and
-  // replaced by one with the same address).
-  uint64_t next_dispatcher_key_ = 0;
-  std::unordered_map<uint64_t, Dispatcher*> dispatcher_by_key_;
-  // Reverse lookup necessary for removals/updates.
-  std::unordered_map<Dispatcher*, uint64_t> key_by_dispatcher_;
-  // A list of dispatcher keys that we're interested in for the current
-  // select(), poll(), or WSAWaitForMultipleEvents() loop. Again, used to avoid
-  // the ABA problem (a socket being destroyed and a new one created with the
-  // same handle, erroneously receiving the events from the destroyed socket).
-  //
-  // Kept as a member variable just for efficiency.
-  std::vector<uint64_t> current_dispatcher_keys_;
-  Signaler* signal_wakeup_;  // Assigned in constructor only
-  RecursiveCriticalSection crit_;
-#if defined(__OS_WIN__)
-  const WSAEVENT socket_ev_;
-#endif
-  bool fWait_;
-  // Are we currently in a select()/epoll()/WSAWaitForMultipleEvents loop?
-  // Used for a DCHECK, because we don't support reentrant waiting.
-  bool waiting_ = false;
+  std::atomic<bool> running_;
+  absl::Mutex pending_lock_;
+  absl::InlinedVector<absl::AnyInvocable<void() &&>, 4> pending_;
 };
 
 }  // namespace base

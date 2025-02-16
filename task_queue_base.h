@@ -11,9 +11,9 @@
 #define BASE_TASK_QUEUE_TASK_QUEUE_BASE_H_
 
 #include <utility>
-
 #include "absl/functional/any_invocable.h"
 #include "absl/time/time.h"
+#include "platform_thread_types.h"
 
 namespace base {
 
@@ -28,6 +28,10 @@ class Location {
 // known task queue, use IsCurrent().
 class TaskQueueBase {
  public:
+  // Users of the TaskQueue should call Delete instead of directly deleting
+  // this object.
+  virtual ~TaskQueueBase() = default;
+
   enum class DelayPrecision {
     // This may include up to a 17 ms leeway in addition to OS timer precision.
     // See PostDelayedTask() for more information.
@@ -49,7 +53,7 @@ class TaskQueueBase {
   // TaskQueue still exists and may call other methods, e.g. PostTask.
   // Should be called on the same task queue or thread that this task queue
   // was created on.
-  virtual void Delete() = 0;
+  // virtual void Delete() = 0;
 
   // Schedules a `task` to execute. Tasks are executed in FIFO order.
   // When a TaskQueue is deleted, pending tasks will not be executed but they
@@ -144,8 +148,8 @@ class TaskQueueBase {
   // Returns the task queue that is running the current thread.
   // Returns nullptr if this thread is not associated with any task queue.
   // May be called on any thread or task queue, including this task queue.
-  static TaskQueueBase* Current();
-  bool IsCurrent() const { return Current() == this; }
+  // static TaskQueueBase* Current();
+  bool IsCurrent() const { return thread_id_ == CurrentThreadRef(); }
 
  protected:
   // This is currently only present here to simplify introduction of future
@@ -162,10 +166,13 @@ class TaskQueueBase {
 
   class CurrentTaskQueueSetter {
    public:
-    explicit CurrentTaskQueueSetter(TaskQueueBase* task_queue);
+    explicit CurrentTaskQueueSetter(TaskQueueBase* task_queue)
+        : previous_(nullptr) {
+      task_queue->thread_id_ = CurrentThreadRef();
+    }
     CurrentTaskQueueSetter(const CurrentTaskQueueSetter&) = delete;
     CurrentTaskQueueSetter& operator=(const CurrentTaskQueueSetter&) = delete;
-    ~CurrentTaskQueueSetter();
+    ~CurrentTaskQueueSetter() = default;
 
    private:
     TaskQueueBase* const previous_;
@@ -185,13 +192,8 @@ class TaskQueueBase {
                                    const PostDelayedTaskTraits& traits,
                                    const Location& location) = 0;
 
-  // Users of the TaskQueue should call Delete instead of directly deleting
-  // this object.
-  virtual ~TaskQueueBase() = default;
-};
-
-struct TaskQueueDeleter {
-  void operator()(TaskQueueBase* task_queue) const { task_queue->Delete(); }
+ private:
+  PlatformThreadRef thread_id_ = -1;
 };
 
 }  // namespace base

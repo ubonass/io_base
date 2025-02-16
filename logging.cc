@@ -16,21 +16,21 @@ static absl::LogSink* g_log_sink_ = nullptr;
 void BasicLogSink::Send(const absl::LogEntry& entry) {
   switch (entry.log_severity()) {
     case absl::LogSeverity::kInfo:
-      OnLogMessage(INFO, entry.text_message());
+      OnLogMessage(INFO, entry.text_message_with_prefix_and_newline());
       break;
     case absl::LogSeverity::kWarning:
-      OnLogMessage(WARNING, entry.text_message());
+      OnLogMessage(WARNING, entry.text_message_with_prefix_and_newline());
       break;
 
     case absl::LogSeverity::kError:
-      OnLogMessage(ERROR, entry.text_message());
+      OnLogMessage(ERROR, entry.text_message_with_prefix_and_newline());
       break;
 
     case absl::LogSeverity::kFatal:
-      OnLogMessage(FATAL, entry.text_message());
+      OnLogMessage(FATAL, entry.text_message_with_prefix_and_newline());
       break;
     default:
-      OnLogMessage(INFO, entry.text_message());
+      OnLogMessage(INFO, entry.text_message_with_prefix_and_newline());
       break;
   }
 }

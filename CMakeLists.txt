@@ -56,11 +56,24 @@ list(APPEND BASE_SRCS
   recursive_critical_section.cc
   event.cc
   event_loop.cc
+  time_utils.cc
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Android")
   list(APPEND BASE_SRCS
     stacktrace.cc
+  )
+endif()
+
+if (MSVC)
+  add_compile_definitions(UNICODE)
+  add_compile_definitions(_UNICODE)
+  add_compile_definitions(NOMINMAX)
+  add_compile_definitions(NOGDI)
+  add_compile_definitions(WIN32_LEAN_AND_MEAN)
+  
+  list(APPEND BASE_SRCS
+    event_loop_win.cc
   )
 endif()
 
@@ -73,18 +86,46 @@ target_link_libraries(io_base PRIVATE
   $<$<TARGET_EXISTS:absl::algorithm>:absl::algorithm>
   $<$<TARGET_EXISTS:absl::flags>:absl::flags>
   $<$<TARGET_EXISTS:absl::absl_check>:absl::absl_check>
-  $<$<TARGET_EXISTS:absl::absl_log>:absl::absl_log>
   $<$<TARGET_EXISTS:absl::strings>:absl::strings>
   $<$<TARGET_EXISTS:absl::str_format>:absl::str_format>
   $<$<TARGET_EXISTS:absl::synchronization>:absl::synchronization>
   $<$<TARGET_EXISTS:absl::base>:absl::time>
   $<$<TARGET_EXISTS:absl::base>:absl::optional>
   $<$<TARGET_EXISTS:absl::utility>:absl::utility>
+  $<$<TARGET_EXISTS:absl::absl_log>:absl::absl_log>
+  $<$<TARGET_EXISTS:absl::log_initialize>:absl::log_initialize>
 )
+
+if (MSVC)
+  target_link_libraries(io_base PRIVATE
+    ws2_32.lib
+    winmm.lib
+  )
+endif()
 
 target_include_directories(io_base PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 add_library(io_base::io_base ALIAS io_base)
+
+add_executable(test_base test_base.cc)
+
+target_link_libraries(test_base 
+  io_base
+  $<$<TARGET_EXISTS:absl::base>:absl::base>
+  $<$<TARGET_EXISTS:absl::algorithm>:absl::algorithm>
+  $<$<TARGET_EXISTS:absl::flags>:absl::flags>
+  $<$<TARGET_EXISTS:absl::absl_check>:absl::absl_check>
+  $<$<TARGET_EXISTS:absl::strings>:absl::strings>
+  $<$<TARGET_EXISTS:absl::str_format>:absl::str_format>
+  $<$<TARGET_EXISTS:absl::synchronization>:absl::synchronization>
+  $<$<TARGET_EXISTS:absl::base>:absl::time>
+  $<$<TARGET_EXISTS:absl::base>:absl::optional>
+  $<$<TARGET_EXISTS:absl::utility>:absl::utility> 
+  $<$<TARGET_EXISTS:absl::absl_log>:absl::absl_log> 
+  $<$<TARGET_EXISTS:absl::log_initialize>:absl::log_initialize>
+  ws2_32.lib
+  winmm.lib
+)
 

@@ -31,7 +31,7 @@
 #endif
 // clang-format on
 
-namespace rtc {
+namespace base {
 #if defined(_WIN32)
 typedef DWORD PlatformThreadId;
 typedef DWORD PlatformThreadRef;
@@ -57,6 +57,6 @@ bool IsThreadRefEqual(const PlatformThreadRef& a, const PlatformThreadRef& b);
 // Sets the current thread name.
 void SetCurrentThreadName(const char* name);
 
-}  // namespace rtc
+}  // namespace base
 
 #endif  // RTC_BASE_PLATFORM_THREAD_TYPES_H_

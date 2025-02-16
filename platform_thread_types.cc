@@ -32,7 +32,7 @@ typedef HRESULT(WINAPI* RTC_SetThreadDescription)(HANDLE hThread,
 #include "absl/log/absl_check.h"
 #endif
 
-namespace rtc {
+namespace base {
 
 PlatformThreadId CurrentThreadId() {
 #if defined(__OS_WIN__)
@@ -124,4 +124,4 @@ void SetCurrentThreadName(const char* name) {
 #endif
 }
 
-}  // namespace rtc
+}  // namespace base
